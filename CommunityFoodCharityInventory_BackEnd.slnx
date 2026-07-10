@@ -1,1 +1,4 @@
-<Solution />
+<Solution>
+  <Project Path="CommunityFoodCharityInventory.API/CommunityFoodCharityInventory.API.csproj" />
+  <Project Path="CommunityFoodCharityInventory.Domain/CommunityFoodCharityInventory.Domain.csproj" />
+</Solution>
