@@ -1,0 +1,11 @@
+@CommunityFoodCharityInventory.API_HostAddress = http://localhost:5117
+
+GET {{CommunityFoodCharityInventory.API_HostAddress}}/todos/
+Accept: application/json
+
+###
+
+GET {{CommunityFoodCharityInventory.API_HostAddress}}/todos/1
+Accept: application/json
+
+###
