@@ -1,6 +1,7 @@
 using CommunityFoodCharityInventory.API.Data;
 using CommunityFoodCharityInventory.API.DTOs;
 using CommunityFoodCharityInventory.API.Hubs;
+using CommunityFoodCharityInventory.Domain.Models;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
@@ -15,7 +16,7 @@ builder.Services.AddDbContext<CharityDbContext>(options =>
 });
 
 builder.Services.AddSignalR();
-//Add CORS later
+//Add CORS later for front-end access
 
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
@@ -45,6 +46,27 @@ app.MapGet("/api/inventory", async (CharityDbContext db) =>
 })
   .WithName("GetInventoryItems")
   .WithSummary("Retrieves current live kitchen stock amounts and dynamic urgency metrics.");
+
+//2 Create new inventory item
+app.MapPost("/api/inventory", async (CreateItemRequestDto request, CharityDbContext db) =>
+{
+    var newItem = new InventoryItem(
+        Guid.NewGuid(),
+        request.Name,
+        request.CurrentQuantity,
+        request.TargetCap,
+        request.MinThreshold,
+        request.CritThreshold);
+
+    db.FoodInventry.Add(newItem);
+    await db.SaveChangesAsync();
+
+    return Results.Created($"/api/inventory/{newItem.Id}", new InventoryItemDto(
+         newItem.Id, newItem.Name, newItem.EffectiveQuantity, newItem.Status.ToString()
+     ));
+})
+.WithName("CreateInventoryItem")
+.WithSummary("Administratively registers a new trackable item type into the system.");
 
 
 // --- SignalR WebSockets Route Mapping ---
