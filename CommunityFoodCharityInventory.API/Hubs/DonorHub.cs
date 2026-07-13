@@ -5,6 +5,7 @@ namespace CommunityFoodCharityInventory.API.Hubs
     public interface IDonorHubClient
     {
         Task ReceiveInventoryUpdate(InventoryItemDto update);
+        Task ReceiveInventoryDelete(Guid id);
     }
     public class DonorHub :Hub<IDonorHubClient>
     {

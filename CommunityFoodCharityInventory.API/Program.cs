@@ -15,7 +15,11 @@ builder.Services.AddDbContext<CharityDbContext>(options =>
 {
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
 });
+
 builder.Services.AddSignalR();
+//Add CORS later for front-end access
+
+// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
@@ -26,17 +30,20 @@ if (app.Environment.IsDevelopment())
     app.MapScalarApiReference(options =>
     {
         options.WithTitle("Food Charity Live Inventory API");
+
+        
     });
 }
 
 // Minimal HTTP API Endpoints
+//1. Get Inventory Items
+//
 
-// 1. Get Inventory Items
 app.MapGet("/api/inventory", async (CharityDbContext db) =>
 {
     var items = await db.FoodInventry.ToListAsync();
 
-    // FIXED: Swapped TargetCap and EffectiveQuantity to match your DTO order
+    
     var dtos = items.Select(i => new InventoryItemDto(
         i.Id,
         i.Name,
@@ -200,6 +207,34 @@ app.MapPost("/api/inventory/{id}/deduct", async (
 })
 .WithName("DeductStock")
 .WithSummary("Deducts physical stock items when used by kitchen personnel.");
+
+// 8. Retire / Delete Inventory Item
+app.MapDelete("/api/inventory/{id}", async (
+    Guid id,
+    CharityDbContext db,
+    IHubContext<DonorHub, IDonorHubClient> hubContext) =>
+{
+    var item = await db.FoodInventry.FindAsync(id);
+    if (item == null) return Results.NotFound("Inventory item not found.");
+
+    db.FoodInventry.Remove(item);
+
+    try
+    {
+        await db.SaveChangesAsync();
+    }
+    catch (DbUpdateConcurrencyException)
+    {
+        return Results.Conflict("The inventory item was modified or deleted by another process. Please refresh.");
+    }
+
+    // Broadcast the removal to all connected dashboards
+    await hubContext.Clients.All.ReceiveInventoryDelete(id);
+
+    return Results.Ok(new { Message = $"Inventory item '{item.Name}' has been successfully retired." });
+})
+.WithName("DeleteInventoryItem")
+.WithSummary("Administratively retires and permanently deletes an inventory item from tracking.");
 
 
 // --- SignalR WebSocket Route Mapping ---
