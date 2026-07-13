@@ -3,6 +3,7 @@ using CommunityFoodCharityInventory.API.DTOs;
 using CommunityFoodCharityInventory.API.Hubs;
 using CommunityFoodCharityInventory.Domain.Models;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 using System.Text.Json.Serialization;
@@ -68,6 +69,38 @@ app.MapPost("/api/inventory", async (CreateItemRequestDto request, CharityDbCont
 .WithName("CreateInventoryItem")
 .WithSummary("Administratively registers a new trackable item type into the system.");
 
+// 3. Pledge Stock
+app.MapPost("/api/inventory/{id}/pledge", async (
+    Guid id,
+    PledgeRequestDto request,
+    CharityDbContext db,
+    IHubContext<DonorHub, IDonorHubClient> hubContext) =>
+{
+    var item = await db.FoodInventry.FindAsync(id);
+    if (item == null) return Results.NotFound("Inventory item not found.");
+
+    if (!item.TryAddPledge(request.Quantity))
+    {
+        return Results.BadRequest("Thank you! However, other pledges have already maxed out our target storage capacity.");
+    }
+
+    try
+    {
+        await db.SaveChangesAsync();
+    }
+    catch (DbUpdateConcurrencyException)
+    {
+        return Results.Conflict("The inventory status changed while processing your request. Please try again.");
+    }
+
+    await hubContext.Clients.All.ReceiveInventoryUpdate(new InventoryItemDto(
+        item.Id, item.Name, item.EffectiveQuantity, item.Status.ToString()
+    ));
+
+    return Results.Ok(new { Message = "Pledge registered successfully!" });
+})
+.WithName("CreatePledge")
+.WithSummary("Registers a donor drop-off commitment and updates the live web dashboards.");
 
 // --- SignalR WebSockets Route Mapping ---
 app.MapHub<DonorHub>("/donorHub");
