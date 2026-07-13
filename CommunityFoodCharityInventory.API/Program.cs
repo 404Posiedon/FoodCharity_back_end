@@ -102,6 +102,53 @@ app.MapPost("/api/inventory/{id}/pledge", async (
 .WithName("CreatePledge")
 .WithSummary("Registers a donor drop-off commitment and updates the live web dashboards.");
 
+// 4. Fulfill Pledge (Pledge Arrives physically at the kitchen)
+app.MapPost("/api/inventory/{id}/fulfill-pledge", async (
+    Guid id,
+    PledgeRequestDto request, // Reusing pledge request object for quantity matching
+    CharityDbContext db,
+    IHubContext<DonorHub, IDonorHubClient> hubContext) =>
+{
+    var item = await db.FoodInventry.FindAsync(id);
+    if (item == null) return Results.NotFound();
+
+    // Move quantity out of 'Pledged' buffer directly into 'Current physical stock'
+    item.ReleasePledge(request.Quantity);
+    item.AdjustQuantity(request.Quantity);
+
+    await db.SaveChangesAsync();
+
+    await hubContext.Clients.All.ReceiveInventoryUpdate(new InventoryItemDto(
+        item.Id, item.Name, item.EffectiveQuantity, item.Status.ToString()
+    ));
+
+    return Results.Ok(new { Message = "Pledge physically received and stock updated." });
+})
+.WithName("FulfillPledge")
+.WithSummary("Converts virtual pledged quantities into true physical stock upon physical arrival.");
+
+// 5. Cancel / Revoke Pledge
+app.MapPost("/api/inventory/{id}/cancel-pledge", async (
+    Guid id,
+    PledgeRequestDto request,
+    CharityDbContext db,
+    IHubContext<DonorHub, IDonorHubClient> hubContext) =>
+{
+    var item = await db.FoodInventry.FindAsync(id);
+    if (item == null) return Results.NotFound();
+
+    item.ReleasePledge(request.Quantity);
+    await db.SaveChangesAsync();
+
+    await hubContext.Clients.All.ReceiveInventoryUpdate(new InventoryItemDto(
+        item.Id, item.Name, item.EffectiveQuantity, item.Status.ToString()
+    ));
+
+    return Results.Ok(new { Message = "Pledge cancelled. Capacity freed for other donors." });
+})
+.WithName("CancelPledge")
+.WithSummary("Manually drops a reservation tier allocation if a donor falls through.");
+
 // --- SignalR WebSockets Route Mapping ---
 app.MapHub<DonorHub>("/donorHub");
 
