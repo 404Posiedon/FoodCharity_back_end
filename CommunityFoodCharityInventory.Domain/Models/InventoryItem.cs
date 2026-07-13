@@ -30,7 +30,11 @@ namespace CommunityFoodCharityInventory.Domain.Models
             _ => UrgencyLevel.LowStock
         };
 
-        //Constructor
+        //Constructors
+        public InventoryItem()
+        {
+            
+        }
         public InventoryItem(Guid id, string name, double currentQuantity, double targetCap, double minThreshold, double critThreshold)
         {
             Id = id;
