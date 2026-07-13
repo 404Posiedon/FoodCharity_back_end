@@ -35,12 +35,13 @@ namespace CommunityFoodCharityInventory.Domain.Models
         {
             
         }
-        public InventoryItem(Guid id, string name, double currentQuantity, double targetCap, double minThreshold, double critThreshold)
+        public InventoryItem(Guid id, string name, double currentQuantity, double targetCap, double minThreshold,double maxThreshold, double critThreshold)
         {
             Id = id;
             Name = name;
             CurrentQuantity = currentQuantity;
             TargetCap = targetCap;
+            MaximumThreshold = maxThreshold; 
             MinimumThreshold = minThreshold;
             CriticalThreshold = critThreshold;
         }

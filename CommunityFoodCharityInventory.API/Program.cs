@@ -15,11 +15,7 @@ builder.Services.AddDbContext<CharityDbContext>(options =>
 {
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
 });
-
 builder.Services.AddSignalR();
-//Add CORS later for front-end access
-
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
@@ -30,25 +26,33 @@ if (app.Environment.IsDevelopment())
     app.MapScalarApiReference(options =>
     {
         options.WithTitle("Food Charity Live Inventory API");
-
-        
     });
 }
 
 // Minimal HTTP API Endpoints
-//1. Get Inventory Items
-//
 
+// 1. Get Inventory Items
 app.MapGet("/api/inventory", async (CharityDbContext db) =>
 {
     var items = await db.FoodInventry.ToListAsync();
-    var dtos = items.Select(i => new InventoryItemDto(i.Id, i.Name, i.EffectiveQuantity, i.Status.ToString()));
+
+    // FIXED: Swapped TargetCap and EffectiveQuantity to match your DTO order
+    var dtos = items.Select(i => new InventoryItemDto(
+        i.Id,
+        i.Name,
+        i.MinimumThreshold,
+        i.MaximumThreshold,
+        i.CurrentQuantity,
+        i.EffectiveQuantity,
+        i.TargetCap,
+        i.Status.ToString()
+    ));
     return Results.Ok(dtos);
 })
-  .WithName("GetInventoryItems")
-  .WithSummary("Retrieves current live kitchen stock amounts and dynamic urgency metrics.");
+.WithName("GetInventoryItems")
+.WithSummary("Retrieves current live kitchen stock amounts and dynamic urgency metrics.");
 
-//2 Create new inventory item
+// 2. Create new inventory item
 app.MapPost("/api/inventory", async (CreateItemRequestDto request, CharityDbContext db) =>
 {
     var newItem = new InventoryItem(
@@ -57,13 +61,14 @@ app.MapPost("/api/inventory", async (CreateItemRequestDto request, CharityDbCont
         request.CurrentQuantity,
         request.TargetCap,
         request.MinThreshold,
+        request.MaxThreshold,
         request.CritThreshold);
-
+        
     db.FoodInventry.Add(newItem);
     await db.SaveChangesAsync();
 
-    return Results.Created($"/api/inventory/{newItem.Id}", new InventoryItemDto(
-         newItem.Id, newItem.Name, newItem.EffectiveQuantity, newItem.Status.ToString()
+    return Results.Created($"/api/inventory/{newItem.Id}", new InventoryItemRequestDto(
+         newItem.Id, newItem.Name, newItem.EffectiveQuantity,newItem.MinimumThreshold,newItem.MaximumThreshold,newItem.TargetCap, newItem.Status.ToString()
      ));
 })
 .WithName("CreateInventoryItem")
@@ -93,8 +98,9 @@ app.MapPost("/api/inventory/{id}/pledge", async (
         return Results.Conflict("The inventory status changed while processing your request. Please try again.");
     }
 
+    
     await hubContext.Clients.All.ReceiveInventoryUpdate(new InventoryItemDto(
-        item.Id, item.Name, item.EffectiveQuantity, item.Status.ToString()
+        item.Id, item.Name, item.MinimumThreshold, item.MaximumThreshold, item.CurrentQuantity, item.EffectiveQuantity, item.TargetCap, item.Status.ToString()
     ));
 
     return Results.Ok(new { Message = "Pledge registered successfully!" });
@@ -105,21 +111,21 @@ app.MapPost("/api/inventory/{id}/pledge", async (
 // 4. Fulfill Pledge (Pledge Arrives physically at the kitchen)
 app.MapPost("/api/inventory/{id}/fulfill-pledge", async (
     Guid id,
-    PledgeRequestDto request, // Reusing pledge request object for quantity matching
+    PledgeRequestDto request,
     CharityDbContext db,
     IHubContext<DonorHub, IDonorHubClient> hubContext) =>
 {
     var item = await db.FoodInventry.FindAsync(id);
     if (item == null) return Results.NotFound();
 
-    // Move quantity out of 'Pledged' buffer directly into 'Current physical stock'
     item.ReleasePledge(request.Quantity);
     item.AdjustQuantity(request.Quantity);
 
     await db.SaveChangesAsync();
 
+    
     await hubContext.Clients.All.ReceiveInventoryUpdate(new InventoryItemDto(
-        item.Id, item.Name, item.EffectiveQuantity, item.Status.ToString()
+        item.Id, item.Name, item.MinimumThreshold, item.MaximumThreshold, item.CurrentQuantity, item.EffectiveQuantity, item.TargetCap, item.Status.ToString()
     ));
 
     return Results.Ok(new { Message = "Pledge physically received and stock updated." });
@@ -140,8 +146,9 @@ app.MapPost("/api/inventory/{id}/cancel-pledge", async (
     item.ReleasePledge(request.Quantity);
     await db.SaveChangesAsync();
 
+    
     await hubContext.Clients.All.ReceiveInventoryUpdate(new InventoryItemDto(
-        item.Id, item.Name, item.EffectiveQuantity, item.Status.ToString()
+        item.Id, item.Name, item.MinimumThreshold, item.MaximumThreshold, item.CurrentQuantity, item.EffectiveQuantity, item.TargetCap, item.Status.ToString()
     ));
 
     return Results.Ok(new { Message = "Pledge cancelled. Capacity freed for other donors." });
@@ -149,9 +156,54 @@ app.MapPost("/api/inventory/{id}/cancel-pledge", async (
 .WithName("CancelPledge")
 .WithSummary("Manually drops a reservation tier allocation if a donor falls through.");
 
-// --- SignalR WebSockets Route Mapping ---
-app.MapHub<DonorHub>("/donorHub");
+// 6. Direct Restock (Bulk unexpected arrivals/Purchased goods)
+app.MapPost("/api/inventory/{id}/restock", async (
+    Guid id,
+    RestockRequestDto request,
+    CharityDbContext db,
+    IHubContext<DonorHub, IDonorHubClient> hubContext) =>
+{
+    var item = await db.FoodInventry.FindAsync(id);
+    if (item == null) return Results.NotFound();
 
+    item.AdjustQuantity(request.Quantity);
+    await db.SaveChangesAsync();
+
+   
+    await hubContext.Clients.All.ReceiveInventoryUpdate(new InventoryItemDto(
+        item.Id, item.Name, item.MinimumThreshold, item.MaximumThreshold, item.CurrentQuantity, item.EffectiveQuantity, item.TargetCap, item.Status.ToString()
+    ));
+
+    return Results.Ok(new { Message = "Direct stock replenishment successful." });
+})
+.WithName("RestockStock")
+.WithSummary("Directly increments physical storage volumes without a preceding pledge trail.");
+
+// 7. Deduct Stock (Kitchen usage)
+app.MapPost("/api/inventory/{id}/deduct", async (
+    Guid id,
+    DeductRequestDto request,
+    CharityDbContext db,
+    IHubContext<DonorHub, IDonorHubClient> hubContext) =>
+{
+    var item = await db.FoodInventry.FindAsync(id);
+    if (item == null) return Results.NotFound();
+
+    item.AdjustQuantity(-request.Quantity);
+    await db.SaveChangesAsync();
+
+    await hubContext.Clients.All.ReceiveInventoryUpdate(new InventoryItemDto(
+       item.Id, item.Name, item.MinimumThreshold, item.MaximumThreshold, item.CurrentQuantity, item.EffectiveQuantity, item.TargetCap, item.Status.ToString()
+   ));
+
+    return Results.Ok(new { Message = "Stock deducted successfully." });
+})
+.WithName("DeductStock")
+.WithSummary("Deducts physical stock items when used by kitchen personnel.");
+
+
+// --- SignalR WebSocket Route Mapping ---
+app.MapHub<DonorHub>("/donorHub");
 
 app.Run();
 
